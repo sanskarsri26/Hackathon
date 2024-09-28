@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Debate Coach Chatbot</title>
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+</head>
+<body>
+    <h1>Debate Coach Chatbot</h1>
+    <div id="chat-container">
+        <div id="chat-messages"></div>
+        <input type="text" id="user-input" placeholder="Type your message...">
+        <button onclick="sendMessage()">Send</button>
+    </div>
+    <script>
+        function sendMessage() {
+            var userInput = $('#user-input').val();
+            $('#chat-messages').append('<p><strong>You:</strong> ' + userInput + '</p>');
+            $('#user-input').val('');
+
+            $.ajax({
+                url: '/chat',
+                method: 'POST',
+                contentType: 'application/json',
+                data: JSON.stringify({ message: userInput }),
+                success: function(response) {
+                    $('#chat-messages').append('<p><strong>AI Coach:</strong> ' + response.response + '</p>');
+                    if (response.audio_url) {
+                        var audio = new Audio(response.audio_url);
+                        audio.play();
+                    }
+                },
+                error: function(xhr, status, error) {
+                    $('#chat-messages').append('<p><strong>Error:</strong> ' + xhr.responseJSON.error + '</p>');
+                }
+            });
+        }
+    </script>
+</body>
+</html>
