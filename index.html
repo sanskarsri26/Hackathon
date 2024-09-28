@@ -5,6 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Debate Coach Chatbot</title>
     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <style>
+        .emotion {
+            font-weight: bold;
+            margin-right: 10px;
+        }
+    </style>
 </head>
 <body>
     <h1>Debate Coach Chatbot</h1>
@@ -25,7 +31,8 @@
                 contentType: 'application/json',
                 data: JSON.stringify({ message: userInput }),
                 success: function(response) {
-                    $('#chat-messages').append('<p><strong>AI Coach:</strong> ' + response.response + '</p>');
+                    var emotionSpan = '<span class="emotion">[' + response.emotion + ']</span>';
+                    $('#chat-messages').append('<p><strong>AI Coach:</strong> ' + emotionSpan + response.response + '</p>');
                     if (response.audio_url) {
                         var audio = new Audio(response.audio_url);
                         audio.play();
