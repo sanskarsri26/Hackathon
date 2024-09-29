@@ -1,12 +1,12 @@
 import os
 import re
-from flask import Flask, request, jsonify, send_file
+import random
+from flask import Flask, request, jsonify, send_file, send_from_directory
 from google.ai import generativelanguage_v1beta as glm
 from google.api_core import client_options as client_options_lib
 from gtts import gTTS
 import tempfile
 from dotenv import load_dotenv
-from flask import Flask, request, jsonify, send_file, send_from_directory
 
 load_dotenv()  # Load environment variables from .env file
 
@@ -21,8 +21,10 @@ client_options = client_options_lib.ClientOptions(
 )
 client = glm.GenerativeServiceClient(client_options=client_options)
 
+# Updated system prompt to include topic-based responses
 system_prompt = """
-You are an AI debate coach designed to help users prepare for debates, interviews, and Model United Nations (MUNs). Your tasks include:
+You are an AI debate coach designed to help users prepare for debates, interviews, and Model United Nations (MUNs). 
+Your tasks include:
 
 1. Cross-questioning: Ask probing questions to challenge the user's arguments and help them think critically.
 2. Identifying fallacies: Point out logical fallacies in the user's statements and explain how to avoid them.
@@ -30,9 +32,13 @@ You are an AI debate coach designed to help users prepare for debates, interview
 4. Offering constructive feedback: Give specific suggestions for improvement while maintaining a supportive and encouraging tone.
 5. Simulating different scenarios: Act as various debate opponents or interviewers to help the user practice for different situations.
 
-Adapt your responses based on the user's skill level and the specific type of event they're preparing for (debate, interview, or MUN).
+You will simulate the following roles:
+1. Ambassador of Country A (Proponent of a given topic)
+2. Ambassador of Country B (Skeptic of the given topic)
+3. Ambassador of Country C (Mediator)
+4. Delegate (User)
 
-Important: Provide your responses in a conversational tone, without using markdown formatting, asterisks, or other special symbols. Use natural language and avoid unnecessary headings or list markers. Your response should be fluent and easy to read aloud.
+Adapt your responses based on the user's skill level, the specific topic they provide, and the type of event they're preparing for (debate, interview, or MUN).
 """
 
 conversation_history = [
@@ -40,7 +46,7 @@ conversation_history = [
     glm.Content(
         parts=[
             glm.Part(
-                text="Understood. I'm ready to help you prepare for your debate. What specific topic or aspect would you like to focus on?"
+                text="Understood. Please provide a topic for our MUN debate, and I'll prepare responses accordingly."
             )
         ],
         role="model",
@@ -78,12 +84,24 @@ def get_gemini_response(recognized_text):
         conversation_history.append(
             glm.Content(parts=[glm.Part(text=cleaned_response)], role="model")
         )
-        return cleaned_response.split(". ")  # Split into sentences
+        return cleaned_response  # Return the cleaned response directly
     except Exception as e:
         print(f"Error in get_gemini_response: {type(e).__name__}: {str(e)}")
-        return [
-            f"An error occurred while processing your request: {type(e).__name__}. Please try again."
-        ]
+        return f"An error occurred while processing your request: {type(e).__name__}. Please try again."
+
+
+def generate_ambassador_responses(topic):
+    ambassador_prompts = [
+        f"Provide a supportive argument for Country A regarding the topic: '{topic}'.",
+        f"Provide a skeptical argument for Country B regarding the topic: '{topic}'.",
+        f"As a mediator, provide a balanced perspective on the topic: '{topic}'.",
+    ]
+
+    responses = []
+    for prompt in ambassador_prompts:
+        responses.append(get_gemini_response(prompt))
+
+    return responses
 
 
 def text_to_speech_gtts(text):
@@ -102,27 +120,58 @@ def index():
 
 @app.route("/chat", methods=["POST"])
 def chat_endpoint():
+    global conversation_history
     data = request.json
     recognized_text = data.get("message", "")
 
     if not recognized_text:
         return jsonify({"error": "No message provided"}), 400
 
-    try:
-        sentences = get_gemini_response(recognized_text)  # Get response sentences
+    # Store the user-defined topic in the conversation history
+    if "topic" not in conversation_history[-1].parts[0].text:
+        topic = recognized_text  # The recognized text is treated as the topic
+        conversation_history.append(
+            glm.Content(parts=[glm.Part(text=topic)], role="user")
+        )
+        topic_response = f"Thank you for providing the topic: '{topic}'. Each ambassador will present their arguments now."
+
+        # Generate ambassador responses
+        ambassador_responses = generate_ambassador_responses(topic)
+
+        # Add the ambassador responses to the conversation history
+        for i, response in enumerate(ambassador_responses):
+            role = ["Country A", "Country B", "Country C"][i]
+            conversation_history.append(
+                glm.Content(
+                    parts=[
+                        glm.Part(text=f"I am the representative of {role}: {response}")
+                    ],
+                    role="model",
+                )
+            )
+
+        # Provide the topic announcement and ambassadors' responses
+        return jsonify({"response": [topic_response] + ambassador_responses})
+
+    # User is engaging in the debate
+    user_response = get_gemini_response(recognized_text)  # Get user response
+
+    # After the user speaks, provide a rating
+    if user_response:
+        sentences = user_response.split(". ")
         audio_files = [text_to_speech_gtts(sentence) for sentence in sentences]
 
+        # Randomly score the user
+        score = random.uniform(7.0, 9.0)
         return jsonify(
             {
                 "response": sentences,
                 "audio_urls": [
                     f"/audio/{os.path.basename(file)}" for file in audio_files
                 ],
+                "rating": f"You have received a score of {score:.1f}/10. Thank you for your participation!",
             }
         )
-    except Exception as e:
-        print(f"Error in chat_endpoint: {e}")
-        return jsonify({"error": "An error occurred processing your request"}), 500
 
 
 @app.route("/audio/<filename>")

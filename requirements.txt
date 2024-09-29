@@ -2,3 +2,254 @@ flask
 pillow
 pyttsx3
 gTTS
+
+
+
+
+
+DON'T REMOVE THIS 
+
+
+
+import os
+import re
+from flask import Flask, request, jsonify, send_file
+from google.ai import generativelanguage_v1beta as glm
+from google.api_core import client_options as client_options_lib
+from gtts import gTTS
+import tempfile
+from dotenv import load_dotenv
+from flask import Flask, request, jsonify, send_file, send_from_directory
+
+load_dotenv()  # Load environment variables from .env file
+
+app = Flask(__name__)
+
+# Load API key from environment variable
+api_key = os.getenv("GEMINI_API_KEY")
+
+# Initialize Gemini client
+client_options = client_options_lib.ClientOptions(
+    api_endpoint="generativelanguage.googleapis.com", api_key=api_key
+)
+client = glm.GenerativeServiceClient(client_options=client_options)
+
+system_prompt = """
+You are an AI debate coach designed to help users prepare for debates, interviews, and Model United Nations (MUNs). Your tasks include:
+
+1. Cross-questioning: Ask probing questions to challenge the user's arguments and help them think critically.
+2. Identifying fallacies: Point out logical fallacies in the user's statements and explain how to avoid them.
+3. Improving speaking style: Provide feedback on the user's language, tone, and delivery to enhance their public speaking skills.
+4. Offering constructive feedback: Give specific suggestions for improvement while maintaining a supportive and encouraging tone.
+5. Simulating different scenarios: Act as various debate opponents or interviewers to help the user practice for different situations.
+
+Adapt your responses based on the user's skill level and the specific type of event they're preparing for (debate, interview, or MUN).
+
+Important: Provide your responses in a conversational tone, without using markdown formatting, asterisks, or other special symbols. Use natural language and avoid unnecessary headings or list markers. Your response should be fluent and easy to read aloud.
+"""
+
+conversation_history = [
+    glm.Content(parts=[glm.Part(text=system_prompt)], role="user"),
+    glm.Content(
+        parts=[
+            glm.Part(
+                text="Understood. I'm ready to help you prepare for your debate. What specific topic or aspect would you like to focus on?"
+            )
+        ],
+        role="model",
+    ),
+]
+
+
+def clean_response(text):
+    unwanted_phrases = ["Discussion:", "Analysis:", "Conclusion:", "Summary:"]
+    for phrase in unwanted_phrases:
+        text = text.replace(phrase, "")
+    text = re.sub(r"#{1,6}\s?", "", text)
+    text = re.sub(r"[*_]{1,2}", "", text)
+    text = re.sub(r"^\s*[-*+]\s|\d+\.\s", "", text, flags=re.MULTILINE)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    text = re.sub(r"[^\w\s.,?!]", "", text)
+    return text.strip()
+
+
+def get_gemini_response(recognized_text):
+    global conversation_history
+    if not recognized_text.strip():
+        return "Please provide a non-empty message."
+    try:
+        conversation_history.append(
+            glm.Content(parts=[glm.Part(text=recognized_text)], role="user")
+        )
+        request = glm.GenerateContentRequest(
+            model="models/gemini-pro",
+            contents=conversation_history,
+        )
+        response = client.generate_content(request)
+        raw_response = response.candidates[0].content.parts[0].text
+        cleaned_response = clean_response(raw_response)
+        conversation_history.append(
+            glm.Content(parts=[glm.Part(text=cleaned_response)], role="model")
+        )
+        return cleaned_response.split(". ")  # Split into sentences
+    except Exception as e:
+        print(f"Error in get_gemini_response: {type(e).__name__}: {str(e)}")
+        return [
+            f"An error occurred while processing your request: {type(e).__name__}. Please try again."
+        ]
+
+
+def text_to_speech_gtts(text):
+    tts = gTTS(text=text, lang="en")
+    temp_dir = tempfile.gettempdir()
+    temp_file = os.path.join(temp_dir, f"speech_{os.urandom(8).hex()}.mp3")
+    tts.save(temp_file)
+    return temp_file
+
+
+@app.route("/")
+def index():
+    # Serve 'index.html' from the current directory
+    return send_from_directory(".", "index.html")
+
+
+@app.route("/chat", methods=["POST"])
+def chat_endpoint():
+    data = request.json
+    recognized_text = data.get("message", "")
+
+    if not recognized_text:
+        return jsonify({"error": "No message provided"}), 400
+
+    try:
+        sentences = get_gemini_response(recognized_text)  # Get response sentences
+        audio_files = [text_to_speech_gtts(sentence) for sentence in sentences]
+
+        return jsonify(
+            {
+                "response": sentences,
+                "audio_urls": [
+                    f"/audio/{os.path.basename(file)}" for file in audio_files
+                ],
+            }
+        )
+    except Exception as e:
+        print(f"Error in chat_endpoint: {e}")
+        return jsonify({"error": "An error occurred processing your request"}), 500
+
+
+@app.route("/audio/<filename>")
+def serve_audio(filename):
+    temp_dir = tempfile.gettempdir()
+    return send_file(os.path.join(temp_dir, filename), mimetype="audio/mp3")
+
+
+if __name__ == "__main__":
+    app.run(debug=True)
+
+
+
+
+
+
+DON'T REMOVE THIS
+
+
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Debate Coach Chatbot</title>
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+</head>
+
+<body>
+    <h1>Debate Coach Chatbot</h1>
+    <div id="chat-container">
+        <div id="chat-messages" style="max-height: 300px; overflow-y: auto; border: 1px solid #ccc; padding: 10px;">
+        </div>
+        <button id="mic-button" onclick="startListening()" style="font-size: 24px; padding: 10px;">🎤</button>
+    </div>
+    <div id="status" style="margin-top: 10px; font-weight: bold;"></div>
+
+    <script>
+        let isListening = false;
+
+        function startListening() {
+            if (isListening) return;
+
+            const recognition = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
+            recognition.lang = 'en-US';
+            recognition.interimResults = false;
+
+            recognition.onstart = function () {
+                console.log("Listening...");
+                isListening = true;
+                $('#mic-button').text('🛑');
+                $('#status').text('Listening...');
+            };
+
+            recognition.onresult = function (event) {
+                const transcript = event.results[0][0].transcript;
+                console.log("Recognized text: ", transcript);
+                $('#chat-messages').append('<p><strong>You:</strong> ' + transcript + '</p>');
+
+                $.ajax({
+                    url: '/chat',
+                    method: 'POST',
+                    contentType: 'application/json',
+                    data: JSON.stringify({ message: transcript }),
+                    success: function (response) {
+                        playAudioSequentially(response.audio_urls);
+                    },
+                    error: function (xhr) {
+                        $('#chat-messages').append('<p><strong>Error:</strong> ' + xhr.responseJSON.error + '</p>');
+                    }
+                });
+            };
+
+            recognition.onerror = function (event) {
+                console.error('Error occurred in recognition: ' + event.error);
+                alert("Error occurred: " + event.error);
+                stopListening();
+            };
+
+            recognition.onend = function () {
+                console.log("Stopped listening.");
+                stopListening();
+            };
+
+            try {
+                recognition.start();
+            } catch (error) {
+                console.error('Recognition start error: ', error);
+                alert("Failed to start speech recognition: " + error.message);
+            }
+        }
+
+        function stopListening() {
+            isListening = false;
+            $('#mic-button').text('🎤');
+            $('#status').text('');
+        }
+
+        function playAudioSequentially(audioUrls) {
+            let index = 0;
+
+            function playNext() {
+                if (index < audioUrls.length) {
+                    const audio = new Audio(audioUrls[index]);
+                    audio.play();
+                    audio.onended = playNext;
+                    index++;
+                }
+            }
+
+            playNext(); // Start playing the first audio
+        }
+    </script>
+</body>
+
+</html>

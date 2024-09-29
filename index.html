@@ -45,6 +45,7 @@
                     contentType: 'application/json',
                     data: JSON.stringify({ message: transcript }),
                     success: function (response) {
+                        displayResponses(response.response);
                         playAudioSequentially(response.audio_urls);
                     },
                     error: function (xhr) {
@@ -76,6 +77,18 @@
             isListening = false;
             $('#mic-button').text('🎤');
             $('#status').text('');
+        }
+
+        function displayResponses(responses) {
+            responses.forEach((response, index) => {
+                const speaker = getSpeakerLabel(index);
+                $('#chat-messages').append('<p><strong>' + speaker + ':</strong> ' + response + '</p>');
+            });
+        }
+
+        function getSpeakerLabel(index) {
+            const speakers = ["Ambassador of Country A", "Ambassador of Country B", "Ambassador of Country C", "You"];
+            return speakers[index % speakers.length]; // Rotate through the speakers
         }
 
         function playAudioSequentially(audioUrls) {
