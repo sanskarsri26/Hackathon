@@ -4,106 +4,164 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Debate Coach Chatbot</title>
-    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <title>MUN Debate Coach</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        #messages {
+            margin-bottom: 20px;
+        }
+
+        button {
+            padding: 10px;
+            margin-right: 10px;
+        }
+
+        #endSessionBtn {
+            display: none;
+            margin-top: 10px;
+        }
+    </style>
 </head>
 
 <body>
-    <h1>Debate Coach Chatbot</h1>
-    <div id="chat-container">
-        <div id="chat-messages" style="max-height: 300px; overflow-y: auto; border: 1px solid #ccc; padding: 10px;">
-        </div>
-        <button id="mic-button" onclick="startListening()" style="font-size: 24px; padding: 10px;">🎤</button>
+    <div id="app">
+        <h1>MUN Debate Coach</h1>
+        <div id="messages"></div>
+        <button id="micBtn">Start Speaking</button>
+        <button id="endSessionBtn" disabled>End Session</button>
     </div>
-    <div id="status" style="margin-top: 10px; font-weight: bold;"></div>
 
     <script>
+        const micBtn = document.getElementById('micBtn');
+        const endSessionBtn = document.getElementById('endSessionBtn');
+        const messagesDiv = document.getElementById('messages');
         let isListening = false;
+        let recognition;
 
-        function startListening() {
-            if (isListening) return;
-
-            const recognition = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
-            recognition.lang = 'en-US';
+        if ('webkitSpeechRecognition' in window) {
+            recognition = new webkitSpeechRecognition();
+            recognition.continuous = false;
             recognition.interimResults = false;
-
-            recognition.onstart = function () {
-                console.log("Listening...");
-                isListening = true;
-                $('#mic-button').text('🛑');
-                $('#status').text('Listening...');
-            };
 
             recognition.onresult = function (event) {
                 const transcript = event.results[0][0].transcript;
-                console.log("Recognized text: ", transcript);
-                $('#chat-messages').append('<p><strong>You:</strong> ' + transcript + '</p>');
-
-                $.ajax({
-                    url: '/chat',
-                    method: 'POST',
-                    contentType: 'application/json',
-                    data: JSON.stringify({ message: transcript }),
-                    success: function (response) {
-                        displayResponses(response.response);
-                        playAudioSequentially(response.audio_urls);
-                    },
-                    error: function (xhr) {
-                        $('#chat-messages').append('<p><strong>Error:</strong> ' + xhr.responseJSON.error + '</p>');
-                    }
-                });
+                sendMessage(transcript);
             };
 
             recognition.onerror = function (event) {
-                console.error('Error occurred in recognition: ' + event.error);
-                alert("Error occurred: " + event.error);
-                stopListening();
+                console.error('Speech recognition error', event.error);
             };
 
             recognition.onend = function () {
-                console.log("Stopped listening.");
-                stopListening();
+                isListening = false;
+                micBtn.textContent = 'Start Speaking';
             };
+        } else {
+            alert('Speech recognition is not supported in this browser.');
+        }
 
-            try {
+        micBtn.addEventListener('click', toggleSpeechRecognition);
+        endSessionBtn.addEventListener('click', endSession);
+
+        function toggleSpeechRecognition() {
+            if (!isListening) {
                 recognition.start();
-            } catch (error) {
-                console.error('Recognition start error: ', error);
-                alert("Failed to start speech recognition: " + error.message);
+                isListening = true;
+                micBtn.textContent = 'Stop Speaking';
+            } else {
+                recognition.stop();
+                isListening = false;
+                micBtn.textContent = 'Start Speaking';
             }
         }
 
-        function stopListening() {
-            isListening = false;
-            $('#mic-button').text('🎤');
-            $('#status').text('');
+        function sendMessage(message) {
+            fetch('/chat', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ message: message }),
+            })
+                .then(response => response.json())
+                .then(data => {
+                    displayMessages(data.response);
+                    playAudio(data.audio_urls);
+                    if (data.waitForUserInput) {
+                        micBtn.disabled = false;
+                    } else {
+                        micBtn.disabled = true;
+                    }
+                    if (data.showEndButton) {
+                        endSessionBtn.style.display = 'block';
+                        endSessionBtn.disabled = false;
+                    } else {
+                        endSessionBtn.style.display = 'none';
+                    }
+                })
+                .catch(error => console.error('Error:', error));
         }
 
-        function displayResponses(responses) {
-            responses.forEach((response, index) => {
-                const speaker = getSpeakerLabel(index);
-                $('#chat-messages').append('<p><strong>' + speaker + ':</strong> ' + response + '</p>');
+        function endSession() {
+            fetch('/chat', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ end_session: true }),
+            })
+                .then(response => response.json())
+                .then(data => {
+                    displayMessages(data.response);
+                    endSessionBtn.disabled = true;
+                    endSessionBtn.style.display = 'none';
+                })
+                .catch(error => console.error('Error:', error));
+        }
+
+        function displayMessages(messages) {
+            if (!Array.isArray(messages)) {
+                messages = [messages];
+            }
+            messages.forEach(message => {
+                console.log("Displaying message:", message);
+                const messageElement = document.createElement('p');
+                messageElement.textContent = message;
+                messagesDiv.appendChild(messageElement);
             });
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
         }
 
-        function getSpeakerLabel(index) {
-            const speakers = ["Ambassador of Country A", "Ambassador of Country B", "Ambassador of Country C", "You"];
-            return speakers[index % speakers.length]; // Rotate through the speakers
-        }
-
-        function playAudioSequentially(audioUrls) {
-            let index = 0;
-
-            function playNext() {
-                if (index < audioUrls.length) {
-                    const audio = new Audio(audioUrls[index]);
-                    audio.play();
-                    audio.onended = playNext;
-                    index++;
-                }
+        function playAudio(audioUrls) {
+            console.log("Attempting to play audio URLs:", audioUrls);
+            if (audioUrls && audioUrls.length > 0) {
+                let currentIndex = 0;
+                const playNext = () => {
+                    if (currentIndex < audioUrls.length) {
+                        const audio = new Audio(audioUrls[currentIndex]);
+                        console.log("Playing audio:", audioUrls[currentIndex]);
+                        audio.play().then(() => {
+                            audio.onended = () => {
+                                currentIndex++;
+                                playNext();
+                            };
+                        }).catch(error => {
+                            console.error("Error playing audio:", error);
+                            currentIndex++;
+                            playNext();
+                        });
+                    }
+                };
+                playNext();
+            } else {
+                console.log("No audio URLs to play");
             }
-
-            playNext(); // Start playing the first audio
         }
     </script>
 </body>

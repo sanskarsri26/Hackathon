@@ -1,7 +1,7 @@
 import os
 import re
 import random
-from flask import Flask, request, jsonify, send_file, send_from_directory
+from flask import Flask, request, jsonify, send_file
 from google.ai import generativelanguage_v1beta as glm
 from google.api_core import client_options as client_options_lib
 from gtts import gTTS
@@ -11,35 +11,36 @@ from dotenv import load_dotenv
 # Load environment variables from a .env file
 load_dotenv()
 
-# Create a Flask app
+# Initialize the Flask application
 app = Flask(__name__)
 
-# Load API key for Gemini AI from environment variables
+# Retrieve the API key from environment variables for Google Gemini
 api_key = os.getenv("GEMINI_API_KEY")
 
-# Set up client options for the Google Gemini AI API
+# Configure client options for the Google Gemini service
 client_options = client_options_lib.ClientOptions(
     api_endpoint="generativelanguage.googleapis.com", api_key=api_key
 )
-
-# Initialize the Google Gemini AI Client
+# Create a client for interacting with the Gemini API
 client = glm.GenerativeServiceClient(client_options=client_options)
 
-# System prompt used to guide the AI to act as an MUN debate coach
+# Define a system prompt that sets the context for the AI as an MUN debate coach
 system_prompt = """
 You are an AI debate coach designed to help users prepare for Model United Nations (MUNs).
 
 Upon receiving the user's input about a specific topic and their country, you will:
-1. As the Chair, introduce the topic and frame the context for discussion.
+
+1. As the Chair, introduce the topic and frame the context for discussion in less than 20 words.
 2. Assign the roles of three ambassadors based on the most relevant countries for the topic, excluding the user's country.
 3. Each ambassador will introduce themselves and present their stance.
 4. Once all ambassadors have spoken, the Chair will ask if the user wants to speak.
 5. After the user speaks, the ambassadors will respond or present new arguments.
+6. Limit each prompt to strictly around 30 words.
 
 Adapt your responses based on the user's input and debate flow.
 """
 
-# Global variables to store conversation state
+# Initialize conversation history with the system prompt and a welcome message
 conversation_history = [
     glm.Content(parts=[glm.Part(text=system_prompt)], role="user"),
     glm.Content(
@@ -52,15 +53,17 @@ conversation_history = [
     ),
 ]
 
-user_country = ""  # Stores the user's country
-debate_stage = 0  # Tracks the stage of the debate (0 = topic input, 1 = debate)
-topic = ""  # Stores the current debate topic
+# Initialize global variables for user country and debate stage
+user_country = ""
+debate_stage = 0
+topic = ""
 
-# Function to clean up AI-generated responses (remove unwanted formatting)
+# Function to clean the response text by removing unwanted phrases and formatting
 def clean_response(text):
     unwanted_phrases = ["Discussion:", "Analysis:", "Conclusion:", "Summary:"]
     for phrase in unwanted_phrases:
         text = text.replace(phrase, "")
+    # Remove markdown headers, special characters, and unnecessary whitespace
     text = re.sub(r"#{1,6}\s?", "", text)
     text = re.sub(r"[*_]{1,2}", "", text)
     text = re.sub(r"^\s*[-*+]\s|\d+\.\s", "", text, flags=re.MULTILINE)
@@ -68,25 +71,27 @@ def clean_response(text):
     text = re.sub(r"[^\w\s.,?!]", "", text)
     return text.strip()
 
-# Function to interact with Gemini AI API and get a response based on the prompt
+# Function to get a response from the Gemini API based on the user's prompt
 def get_gemini_response(prompt):
     global conversation_history
     if not prompt.strip():
         return "Please provide a non-empty message."
     try:
-        system_instruction = "Please provide concise responses of about 50 words or less."
+        system_instruction = "Please provide concise responses of about 30 words or less."
+        # Append user prompt to the conversation history
         conversation_history.append(
             glm.Content(parts=[glm.Part(text=system_instruction + "\n\n" + prompt)], role="user")
         )
+        # Create a request for content generation
         request = glm.GenerateContentRequest(
             model="models/gemini-pro",
             contents=conversation_history,
         )
-        # Call the AI service and get the response
+        # Send the request and get the response
         response = client.generate_content(request)
         raw_response = response.candidates[0].content.parts[0].text
         cleaned_response = clean_response(raw_response)
-        # Save the cleaned response to the conversation history
+        # Append the model's response to the conversation history
         conversation_history.append(
             glm.Content(parts=[glm.Part(text=cleaned_response)], role="model")
         )
@@ -95,129 +100,126 @@ def get_gemini_response(prompt):
         print(f"Error in get_gemini_response: {type(e).__name__}: {str(e)}")
         return f"An error occurred while processing your request: {type(e).__name__}. Please try again."
 
-# Function to assign relevant countries for the debate based on the topic
+# Function to assign relevant countries for debate based on the given topic and user country
 def assign_countries_based_on_topic(topic, user_country):
     prompt = f"""
-    Given the topic '{topic}' and the user's country '{user_country}', 
-    please suggest three relevant countries for the debate, excluding the user's country. 
+    Given the topic '{topic}' and the user's country '{user_country}',
+    please suggest three relevant countries for the debate, excluding the user's country.
+    Choose countries that are most affected by or involved in the topic.
     Provide only the country names, separated by commas, without any additional text.
     """
     response = get_gemini_response(prompt)
     countries = [country.strip() for country in response.split(',') if country.strip() != user_country]
     
-    # If less than 3 countries are provided, generate placeholders
+    # Fill up to three countries with some generic ones if needed
+    generic_countries = ["United States", "China", "India", "Russia", "Brazil", "Germany", "Japan"]
     while len(countries) < 3:
-        countries.append(f"Country {len(countries) + 1}")
+        for country in generic_countries:
+            if country not in countries and country != user_country:
+                countries.append(country)
+                break
     
-    return countries[:3]  # Return exactly 3 countries
+    return countries[:3]
 
-# Function to generate responses for each debate stage
+# Function to generate ambassador responses based on the debate stage
 def generate_ambassador_responses(topic, user_country, stage):
     countries = assign_countries_based_on_topic(topic, user_country)
     if stage == 0:
-        # Prompts for the introduction stage of the debate
+        # Create prompts for the first stage of the debate
         prompts = [
-            f"As the Chair, briefly introduce the topic '{topic}' in about 50 words.",
-            f"As Ambassador A from {countries[0]}, introduce yourself and provide a concise supportive argument for '{topic}' in about 50 words.",
-            f"As Ambassador B from {countries[1]}, introduce yourself and provide a brief skeptical argument against '{topic}' in about 50 words.",
-            f"As Ambassador C from {countries[2]}, introduce yourself and provide a short balanced perspective on '{topic}' in about 50 words.",
+            f"As the Chair, briefly introduce the topic '{topic}' without discussing any points about the topic in strictly about 30 words.",
+            f"As Ambassador A from {countries[0]}, introduce the country you are the ambassador of and provide an argument either supporting or being skeptical about '{topic}' according to what the country they are representing's stance on the topic in strictly about 30 words. You could also either support or oppose the arguments that match your opinions that are just before this prompt and never what would come after it.",
+            f"As Ambassador B from {countries[1]}, introduce the country you are the ambassador of and provide an argument either supporting or being skeptical about '{topic}' according to what the country they are representing's stance on the topic in strictly about 30 words. You could also either support or oppose the arguments that match your opinions that are just before this prompt and never what would come after it.",
+            f"As Ambassador C from {countries[2]}, introduce the country you are the ambassador of and provide an argument either supporting or being skeptical about '{topic}' according to what the country they are representing's stance on the topic in strictly about 30 words. You could also either support or oppose the arguments that match your opinions that are just before this prompt and never what would come after it.",
             f"As the Chair, briefly ask the delegate from {user_country} if they would like to speak, in about 30 words."
         ]
     else:
-        # Prompts for the second stage (after the user speaks)
+        # Create prompts for the second stage of the debate
         prompts = [
-            f"As Ambassador A from {countries[0]}, respond to {user_country}'s delegate or bring a new supporting argument for '{topic}' in about 50 words.",
-            f"As Ambassador B from {countries[1]}, respond to {user_country}'s delegate or bring a new argument against '{topic}' in about 50 words.",
-            f"As Ambassador C from {countries[2]}, provide a brief balanced perspective on recent arguments about '{topic}' in about 50 words.",
-            f"As the Chair, summarize recent points and ask about further motions or voting in about 50 words."
+            f"As Ambassador A from {countries[0]}, respond to {user_country}'s delegate or bring a new argument for '{topic}' in about 30 words.",
+            f"As Ambassador B from {countries[1]}, respond to {user_country}'s delegate or bring a new argument for '{topic}' in about 30 words.",
+            f"As Ambassador C from {countries[2]}, provide a brief perspective on recent arguments about '{topic}' in about 30 words.",
+            f"As the Chair, summarize recent points and ask about further motions or voting in about 30 words."
         ]
 
-    # Generate responses for each prompt using the Gemini AI
-    responses = [get_gemini_response(prompt) for prompt in prompts]
+    responses = []
+    # Get responses from the AI for each prompt
+    for prompt in prompts:
+        response = get_gemini_response(prompt)
+        response = re.sub(r'^.*?:\s*', '', response)  # Remove any prefix like "Ambassador A:"
+        responses.append(response)
+
     return responses
 
 # Function to convert text to speech using gTTS (Google Text-to-Speech)
 def text_to_speech_gtts(text):
-    tts = gTTS(text=text, lang="en")
-    temp_dir = tempfile.gettempdir()  # Create a temporary directory for storing audio files
-    temp_file = os.path.join(temp_dir, f"speech_{os.urandom(8).hex()}.mp3")
-    tts.save(temp_file)  # Save the audio file
-    return temp_file
+    try:
+        tts = gTTS(text=text, lang="en")
+        temp_dir = tempfile.gettempdir()
+        # Save the speech to a temporary mp3 file
+        temp_file = os.path.join(temp_dir, f"speech_{os.urandom(8).hex()}.mp3")
+        tts.save(temp_file)
+        print(f"Audio file saved: {temp_file}")
+        return temp_file
+    except Exception as e:
+        print(f"Error in text_to_speech_gtts: {str(e)}")
+        return None
 
-# Default route for testing if the API is running
+# Route for the home page
 @app.route("/")
 def index():
-    return send_from_directory(".", "index.html")
+    return send_file("index.html")  # Serve the main HTML file
 
-# Main route for handling the debate chat requests
+# Route for handling chat interactions
 @app.route("/chat", methods=["POST"])
 def chat_endpoint():
     global conversation_history, user_country, debate_stage, topic
-    data = request.json  # Get JSON data from the frontend
-    recognized_text = data.get("message", "")  # Get the user's message
+    data = request.json  # Get JSON data from the request
+    recognized_text = data.get("message", "")
+    end_session = data.get("end_session", False)  # Check if session should end
 
-    if not recognized_text:
-        return jsonify({"error": "No message provided"}), 400
+    # Reset the debate stage and conversation history if the session is ending
+    if end_session:
+        debate_stage = 0
+        conversation_history = [glm.Content(parts=[glm.Part(text=system_prompt)], role="user")]
+        return jsonify({
+            "response": ["The debate is over. Thank you for participating!"],
+            "audio_urls": [],
+            "waitForUserInput": False,
+            "showEndButton": False
+        })
 
-    try:
-        if debate_stage == 0:
-            # If this is the first stage of the debate, extract topic and country
-            parts = recognized_text.split(", ")
-            if len(parts) >= 2:
-                topic = parts[0]
-                user_country = parts[1]
-            else:
-                # If only one part is provided, assume it's the topic
-                topic = parts[0]
-                user_country = "Unspecified Country"
+    # Determine if this is the first message and set the user country and topic
+    if debate_stage == 0:
+        user_country = recognized_text.strip()  # Set user country based on input
+        topic = recognized_text  # Set topic for the debate
+        # Prepare ambassador responses
+        responses = generate_ambassador_responses(topic, user_country, debate_stage)
+        # Return responses as a JSON object
+        return jsonify({
+            "response": responses,
+            "audio_urls": [text_to_speech_gtts(r) for r in responses],
+            "waitForUserInput": True,  # Wait for user input after the first message
+            "showEndButton": True  # Show end button to allow session termination
+        })
+    else:
+        # Get the user's response for the next stage of the debate
+        user_response = recognized_text.strip()
+        # Store the user's response in the conversation history
+        conversation_history.append(
+            glm.Content(parts=[glm.Part(text=user_response)], role="user")
+        )
+        # Increase the debate stage
+        debate_stage += 1
+        # Prepare ambassador responses for the next stage
+        responses = generate_ambassador_responses(topic, user_country, debate_stage)
+        return jsonify({
+            "response": responses,
+            "audio_urls": [text_to_speech_gtts(r) for r in responses],
+            "waitForUserInput": False,  # Proceed without waiting for user input
+            "showEndButton": True
+        })
 
-            debate_stage = 1  # Move to the next stage of the debate
-            conversation_history.append(
-                glm.Content(parts=[glm.Part(text=f"Topic: {topic}, User Country: {user_country}")], role="user")
-            )
-            # Generate ambassador responses for the first stage of the debate
-            responses = generate_ambassador_responses(topic, user_country, 0)
-            # Convert the responses to audio using gTTS
-            audio_files = [text_to_speech_gtts(response) for response in responses]
-            return jsonify({
-                "response": responses,  # Send responses as text
-                "audio_urls": [f"/audio/{os.path.basename(file)}" for file in audio_files],  # Send audio URLs
-                "waitForUserInput": True
-            })
-        elif debate_stage == 1:
-            # Handle the user's response in the second stage of the debate
-            user_response = f"The delegate from {user_country} says: {recognized_text}"
-            conversation_history.append(
-                glm.Content(parts=[glm.Part(text=user_response)], role="user")
-            )
-            debate_stage = 2  # Move to the final stage of the debate
-            # Generate ambassador responses after the user has spoken
-            responses = generate_ambassador_responses(topic, user_country, 1)
-            # Convert the responses to audio using gTTS
-            audio_files = [text_to_speech_gtts(response) for response in responses]
-            return jsonify({
-                "response": responses,
-                "audio_urls": [f"/audio/{os.path.basename(file)}" for file in audio_files],
-                "waitForUserInput": False
-            })
-        else:
-            # If debate is finished, reset the conversation
-            debate_stage = 0
-            conversation_history = [
-                glm.Content(parts=[glm.Part(text=system_prompt)], role="user")
-            ]
-            return jsonify({
-                "response": ["The debate is over. Thank you for participating!"],
-                "audio_urls": []
-            })
-    except Exception as e:
-        return jsonify({"error": f"Error: {str(e)}"}), 500
-
-# Serve audio files generated from gTTS
-@app.route("/audio/<filename>")
-def audio_endpoint(filename):
-    return send_file(os.path.join(tempfile.gettempdir(), filename))
-
-# Main entry point to run the Flask app
+# Main entry point for running the Flask application
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(host="0.0.0.0", port=5000)
