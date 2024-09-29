@@ -1,12 +1,12 @@
 import os
 import re
-import speech_recognition as sr
+from flask import Flask, request, jsonify, send_file
 from google.ai import generativelanguage_v1beta as glm
 from google.api_core import client_options as client_options_lib
-from flask import Flask, request, jsonify, send_file, send_from_directory
 from gtts import gTTS
 import tempfile
 from dotenv import load_dotenv
+from flask import Flask, request, jsonify, send_file, send_from_directory
 
 load_dotenv()  # Load environment variables from .env file
 
@@ -42,6 +42,7 @@ conversation_history = [
 ]
 
 def clean_response(text):
+<<<<<<< Updated upstream
     # Remove markdown headers
     text = re.sub(r'#{1,6}\s?', '', text)
     # Remove asterisks and underscores used for emphasis
@@ -55,6 +56,20 @@ def clean_response(text):
     return text.strip()
 
 def get_gemini_response(recognized_text):  # Changed to recognized_text
+=======
+    unwanted_phrases = ["Discussion:", "Analysis:", "Conclusion:", "Summary:"]
+    for phrase in unwanted_phrases:
+        text = text.replace(phrase, "")
+    text = re.sub(r"#{1,6}\s?", "", text)
+    text = re.sub(r"[*_]{1,2}", "", text)
+    text = re.sub(r"^\s*[-*+]\s|\d+\.\s", "", text, flags=re.MULTILINE)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    text = re.sub(r"[^\w\s.,?!]", "", text)
+    return text.strip()
+
+
+def get_gemini_response(recognized_text):
+>>>>>>> Stashed changes
     global conversation_history
     if not recognized_text.strip():
         return "Please provide a non-empty message."
@@ -67,11 +82,20 @@ def get_gemini_response(recognized_text):  # Changed to recognized_text
         response = client.generate_content(request)
         raw_response = response.candidates[0].content.parts[0].text
         cleaned_response = clean_response(raw_response)
+<<<<<<< Updated upstream
         conversation_history.append(glm.Content(parts=[glm.Part(text=cleaned_response)], role="model"))
         return cleaned_response
+=======
+        conversation_history.append(
+            glm.Content(parts=[glm.Part(text=cleaned_response)], role="model")
+        )
+        return cleaned_response.split(". ")  # Split into sentences
+>>>>>>> Stashed changes
     except Exception as e:
         print(f"Error in get_gemini_response: {type(e).__name__}: {str(e)}")
-        return f"An error occurred while processing your request: {type(e).__name__}. Please try again."
+        return [
+            f"An error occurred while processing your request: {type(e).__name__}. Please try again."
+        ]
 
 def text_to_speech_gtts(text):
     tts = gTTS(text=text, lang='en')
@@ -80,6 +104,7 @@ def text_to_speech_gtts(text):
     tts.save(temp_file)
     return temp_file
 
+<<<<<<< Updated upstream
 def recognize_speech():
     recognizer = sr.Recognizer()
     with sr.Microphone() as source:
@@ -109,11 +134,25 @@ def index():
 @app.route('/chat', methods=['POST'])
 def chat_endpoint():
     recognized_text = recognize_speech()  # Get recognized text
+=======
+
+@app.route("/")
+def index():
+    # Serve 'index.html' from the current directory
+    return send_from_directory(".", "index.html")
+
+
+@app.route("/chat", methods=["POST"])
+def chat_endpoint():
+    data = request.json
+    recognized_text = data.get("message", "")
+>>>>>>> Stashed changes
 
     if not recognized_text:
         return jsonify({'error': 'Could not understand audio or no speech detected'}), 400
 
     try:
+<<<<<<< Updated upstream
         response_text = get_gemini_response(recognized_text)  # Pass recognized text
         audio_file = text_to_speech_gtts(response_text)
         
@@ -121,6 +160,19 @@ def chat_endpoint():
             'response': response_text,
             'audio_url': f'/audio/{os.path.basename(audio_file)}'
         })
+=======
+        sentences = get_gemini_response(recognized_text)  # Get response sentences
+        audio_files = [text_to_speech_gtts(sentence) for sentence in sentences]
+
+        return jsonify(
+            {
+                "response": sentences,
+                "audio_urls": [
+                    f"/audio/{os.path.basename(file)}" for file in audio_files
+                ],
+            }
+        )
+>>>>>>> Stashed changes
     except Exception as e:
         print(f"Error in chat_endpoint: {e}")
         return jsonify({'error': 'An error occurred processing your request'}), 500

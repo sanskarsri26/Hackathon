@@ -17,10 +17,10 @@
         <button onclick="sendMessage()">Send</button>
         <button id="mic-button" onclick="startListening()">🎤</button>
     </div>
-    <div id="status" style="margin-top: 10px; font-weight: bold;"></div> <!-- Status message -->
+    <div id="status" style="margin-top: 10px; font-weight: bold;"></div>
 
     <script>
-        let isListening = false; // Flag to manage listening state
+        let isListening = false;
 
         function sendMessage() {
             var userInput = $('#user-input').val();
@@ -64,10 +64,26 @@
                 const transcript = event.results[0][0].transcript;
                 console.log("Recognized text: ", transcript);
                 $('#chat-messages').append('<p><strong>You:</strong> ' + transcript + '</p>');
+<<<<<<< Updated upstream
                 $('#user-input').val(transcript);
                 if (event.results[0].isFinal) { // Check if the result is final
                     sendMessage(); // Send recognized text as a message
                 }
+=======
+
+                $.ajax({
+                    url: '/chat',
+                    method: 'POST',
+                    contentType: 'application/json',
+                    data: JSON.stringify({ message: transcript }),
+                    success: function (response) {
+                        playAudioSequentially(response.audio_urls);
+                    },
+                    error: function (xhr) {
+                        $('#chat-messages').append('<p><strong>Error:</strong> ' + xhr.responseJSON.error + '</p>');
+                    }
+                });
+>>>>>>> Stashed changes
             };
 
             recognition.onerror = function (event) {
@@ -90,9 +106,24 @@
         }
 
         function stopListening() {
-            isListening = false; // Update the listening state
-            $('#mic-button').text('🎤'); // Reset button text
-            $('#status').text(''); // Clear listening status
+            isListening = false;
+            $('#mic-button').text('🎤');
+            $('#status').text('');
+        }
+
+        function playAudioSequentially(audioUrls) {
+            let index = 0;
+
+            function playNext() {
+                if (index < audioUrls.length) {
+                    const audio = new Audio(audioUrls[index]);
+                    audio.play();
+                    audio.onended = playNext;
+                    index++;
+                }
+            }
+
+            playNext(); // Start playing the first audio
         }
     </script>
 </body>
